@@ -181,11 +181,13 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
           width: { ideal: 640, max: 1024 },     // Lower resolution for mobile
           height: { ideal: 480, max: 768 },
           focusMode: 'continuous',
-          frameRate: { ideal: 8, max: 12 }     // Limit frame rate
+          frameRate: { ideal: 8, max: 12 },    // Limit frame rate
+          facingMode: { ideal: 'environment' }  // Prefer rear camera
         } : {
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          focusMode: 'continuous'
+          focusMode: 'continuous',
+          facingMode: { ideal: 'environment' }  // Prefer rear camera on desktop too
         },
         // Disable verbose logging for performance
         verbose: false,
@@ -195,23 +197,37 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
 
       // Try multiple camera configurations for iPhone compatibility
 
-      // Optimized camera initialization sequence for iPhone performance
+      // Optimized camera initialization sequence for mobile performance
       if (isMobile) {
-        // iPhone-optimized sequence: start with most likely to work
+        // Mobile-optimized sequence: prioritize rear camera for barcode scanning
         try {
-          // First try: simple environment camera for iPhone
-          await initializeWithTimeout({ facingMode: 'environment' }, config);
-        } catch (envError) {
-          console.log('Environment camera failed, trying without constraints:', envError);
+          // First try: exact environment camera (rear camera) for mobile
+          await initializeWithTimeout({ facingMode: { exact: 'environment' } }, config);
+        } catch (exactError) {
+          console.log('Exact environment camera failed, trying ideal environment:', exactError);
 
-          // Second try: any camera without constraints (fastest)
+          // Second try: ideal environment camera constraint
           try {
-            await initializeWithTimeout({}, config);
-          } catch (anyError) {
-            console.log('Any camera failed, trying user camera:', anyError);
+            await initializeWithTimeout({ facingMode: { ideal: 'environment' } }, config);
+          } catch (idealError) {
+            console.log('Ideal environment camera failed, trying basic environment:', idealError);
 
-            // Final try: front camera
-            await initializeWithTimeout({ facingMode: 'user' }, config);
+            // Third try: basic environment camera
+            try {
+              await initializeWithTimeout({ facingMode: 'environment' }, config);
+            } catch (basicError) {
+              console.log('Basic environment camera failed, trying any camera:', basicError);
+
+              // Fourth try: any camera (may default to front)
+              try {
+                await initializeWithTimeout({}, config);
+              } catch (anyError) {
+                console.log('Any camera failed, trying front camera as last resort:', anyError);
+
+                // Final try: front camera (not ideal for barcode scanning)
+                await initializeWithTimeout({ facingMode: 'user' }, config);
+              }
+            }
           }
         }
       } else {
@@ -256,7 +272,7 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
       if (errorName === 'NotAllowedError' || errorMessage.includes('Permission denied') || errorMessage.includes('permission denied')) {
         setError('Camera access was denied. Please click "Allow" when your browser asks for camera permission, or enable it in your browser settings.');
       } else if (errorName === 'NotFoundError' || errorMessage.includes('not find') || errorMessage.includes('Requested device not found')) {
-        setError('No camera found on this device. Please ensure your device has a camera or try a different device.');
+        setError('Rear camera not found. Please ensure your device has a rear camera or try using a different device.');
       } else if (errorName === 'NotReadableError' || errorMessage.includes('Could not start video source') || errorMessage.includes('already in use')) {
         setError('Camera is already in use by another application. Please close other apps using the camera and try again.');
       } else if (errorName === 'NotSupportedError' || errorMessage.includes('secure') || errorMessage.includes('Only secure origins')) {
