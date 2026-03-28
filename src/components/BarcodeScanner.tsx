@@ -15,12 +15,16 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const scannerIdRef = useRef<string>('barcode-scanner-' + Math.random().toString(36).substring(7));
   const shouldInitScanner = useRef(false);
+  const isRunningRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
     checkCameraPermission();
     return () => {
-      if (html5QrCodeRef.current) {
+      isMountedRef.current = false;
+      if (html5QrCodeRef.current && isRunningRef.current) {
         html5QrCodeRef.current.stop().catch(console.error);
+        isRunningRef.current = false;
       }
     };
   }, []);
@@ -67,14 +71,29 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
   };
 
   const stopScanning = async () => {
-    if (html5QrCodeRef.current) {
+    if (html5QrCodeRef.current && isRunningRef.current) {
       try {
         await html5QrCodeRef.current.stop();
         html5QrCodeRef.current.clear();
+        isRunningRef.current = false;
       } catch (err) {
         console.error('Error stopping scanner:', err);
+        // Reset the running state even if stop fails
+        isRunningRef.current = false;
       }
     }
+  };
+
+  const qrCodeSuccessCallback = (decodedText: string) => {
+    if (!isMountedRef.current) return;
+
+    console.log('Barcode detected:', decodedText);
+    stopScanning();
+    onScan(decodedText);
+  };
+
+  const qrCodeErrorCallback = () => {
+    // Silent - this fires frequently when no barcode is detected
   };
 
   const startScanning = () => {
@@ -98,11 +117,44 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
 
       html5QrCodeRef.current = new Html5Qrcode(scannerId);
 
+      // Add timeout wrapper for camera initialization
+      const initializeWithTimeout = async (cameraConfig: any, config: any) => {
+        return new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('Camera initialization timeout - this can happen on iPhone'));
+          }, 10000); // 10 second timeout
+
+          html5QrCodeRef.current!.start(
+            cameraConfig,
+            config,
+            qrCodeSuccessCallback,
+            qrCodeErrorCallback
+          ).then(() => {
+            clearTimeout(timeout);
+            isRunningRef.current = true;
+            resolve(true);
+          }).catch((error) => {
+            clearTimeout(timeout);
+            reject(error);
+          });
+        });
+      };
+
+      // Calculate responsive qrbox size based on viewport
+
       const config = {
-        fps: 20,
-        qrbox: { width: 300, height: 100 },
+        fps: 10, // Lower FPS for better iPhone performance
+        qrbox: function(viewfinderWidth: number, viewfinderHeight: number) {
+          const minEdgePercentage = 0.7;
+          const minEdgeSize = Math.min(viewfinderWidth, viewfinderHeight);
+          const qrboxSize = Math.floor(minEdgeSize * minEdgePercentage);
+          return {
+            width: qrboxSize,
+            height: Math.floor(qrboxSize * 0.4) // Rectangular for barcodes
+          };
+        },
         aspectRatio: 1.777778,
-        disableFlip: true,
+        disableFlip: false, // Allow flip for iPhone compatibility
         formatsToSupport: [
           'EAN_13',
           'EAN_8',
@@ -110,31 +162,50 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
           'UPC_E',
           'CODE_128',
           'CODE_39',
+          'CODE_93',
+          'CODABAR',
           'ITF'
-        ]
+        ],
+        rememberLastUsedCamera: true,
+        supportedScanTypes: ['EAN_13', 'EAN_8', 'UPC_A', 'UPC_E', 'CODE_128']
       };
 
-      const qrCodeSuccessCallback = (decodedText: string) => {
-        console.log('Barcode detected:', decodedText);
-        stopScanning();
-        onScan(decodedText);
-      };
 
-      const qrCodeErrorCallback = () => {
-        // Silent - this fires frequently when no barcode is detected
-      };
+      // Try multiple camera configurations for iPhone compatibility
 
-      await html5QrCodeRef.current.start(
-        { facingMode: 'environment' },
-        config,
-        qrCodeSuccessCallback,
-        qrCodeErrorCallback
-      );
+      // First try: environment camera (rear)
+      try {
+        await initializeWithTimeout({ facingMode: 'environment' }, config);
+      } catch (envError) {
+        console.log('Environment camera failed, trying exact constraint:', envError);
+
+        // Second try: specific environment constraint
+        try {
+          await initializeWithTimeout({ facingMode: { exact: 'environment' } }, config);
+        } catch (exactError) {
+          console.log('Exact environment camera failed, trying user camera:', exactError);
+
+          // Third try: user camera (front)
+          try {
+            await initializeWithTimeout({ facingMode: 'user' }, config);
+          } catch (userError) {
+            console.log('User camera failed, trying any camera:', userError);
+
+            // Final try: any available camera
+            await initializeWithTimeout({}, config);
+          }
+        }
+      }
     } catch (err: any) {
       console.error('Error accessing camera:', err);
       console.error('Error type:', err?.name);
       console.error('Error message:', err?.message);
+
+      // Reset scanner state on error
       setIsScanning(false);
+      isRunningRef.current = false;
+
+      if (!isMountedRef.current) return;
 
       const errorMessage = err?.message || err?.toString() || '';
       const errorName = err?.name || '';
@@ -148,38 +219,8 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
       } else if (errorName === 'NotSupportedError' || errorMessage.includes('secure') || errorMessage.includes('Only secure origins')) {
         setError('Camera access requires HTTPS. Please access this site using https:// or localhost.');
       } else if (errorName === 'OverconstrainedError' || errorMessage.includes('Overconstrained')) {
-        setError('Unable to access the rear camera. Trying with available camera...');
-        try {
-          const fallbackConfig = {
-            fps: 20,
-            qrbox: { width: 300, height: 100 },
-            aspectRatio: 1.777778,
-            disableFlip: true,
-            formatsToSupport: [
-              'EAN_13',
-              'EAN_8',
-              'UPC_A',
-              'UPC_E',
-              'CODE_128',
-              'CODE_39',
-              'ITF'
-            ]
-          };
-          await html5QrCodeRef.current?.start(
-            { facingMode: 'user' },
-            fallbackConfig,
-            (decodedText: string) => {
-              console.log('Barcode detected:', decodedText);
-              stopScanning();
-              onScan(decodedText);
-            },
-            () => {}
-          );
-          setError('');
-        } catch (retryErr) {
-          console.error('Retry with front camera also failed:', retryErr);
-          setError('Unable to access any camera on this device.');
-        }
+        setError('Camera constraint issue detected. This is common on mobile devices.');
+        // The multiple camera attempts above should handle this case
       } else if (errorMessage.includes('Camera access is only supported in secure contexts')) {
         setError('Camera access requires HTTPS. Please access this site using https:// or localhost.');
       } else if (errorMessage.includes('not found in DOM')) {
@@ -190,8 +231,8 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
     }
   };
 
-  const handleClose = () => {
-    stopScanning();
+  const handleClose = async () => {
+    await stopScanning();
     onClose();
   };
 
@@ -215,6 +256,9 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
               <div className="bg-slate-50 border thin-rule rule-line p-4">
                 <p className="text-sm font-body text-slate-700 leading-relaxed">
                   Point your camera at the barcode on the back of your board game box. The barcode is typically a 12 or 13 digit number with vertical lines.
+                </p>
+                <p className="text-xs font-body text-slate-600 mt-2 leading-relaxed">
+                  <strong>iPhone users:</strong> Make sure to hold the device horizontally and allow adequate lighting for best results.
                 </p>
               </div>
 
