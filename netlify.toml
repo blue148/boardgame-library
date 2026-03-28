@@ -10,7 +10,7 @@
 # These are meant to be public and embedded in the client bundle
 # Supabase anon keys are protected by Row Level Security (RLS)
 [build.environment]
-  NODE_VERSION = "18"
+  NODE_VERSION = "22"
   SECRETS_SCAN_OMIT_KEYS = "VITE_SUPABASE_URL,VITE_SUPABASE_ANON_KEY"
 
 # SPA routing - redirect all requests to index.html
