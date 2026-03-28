@@ -38,14 +38,26 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
   }, [isScanning]);
 
   const checkCameraPermission = async () => {
+    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const isSafari = /Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent);
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setPermissionStatus('unsupported');
-      setError('Camera access is not supported in this browser. Please use a modern browser like Chrome, Firefox, or Safari.');
+      if (isIOS && isSafari) {
+        setError('Camera access requires iOS 11+ and Safari. Please update your iOS version or use Safari browser.');
+      } else {
+        setError('Camera access is not supported in this browser. Please use a modern browser like Chrome, Firefox, or Safari.');
+      }
       return;
     }
 
+    // iOS requires HTTPS for camera access (stricter than other platforms)
     if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      setError('Camera access requires HTTPS. Please access this site using https:// or use localhost for development.');
+      if (isIOS) {
+        setError('iOS requires HTTPS for camera access. Please use https:// to access this site.');
+      } else {
+        setError('Camera access requires HTTPS. Please access this site using https:// or use localhost for development.');
+      }
       return;
     }
 
@@ -54,19 +66,31 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
       setPermissionStatus(result.state as 'prompt' | 'granted' | 'denied');
 
       if (result.state === 'denied') {
-        setError('Camera access has been blocked. Please enable camera permissions in your browser settings and refresh the page.');
+        if (isIOS) {
+          setError('Camera access blocked. Go to Settings → Safari → Camera → Allow to enable camera access.');
+        } else {
+          setError('Camera access has been blocked. Please enable camera permissions in your browser settings and refresh the page.');
+        }
       }
 
       result.addEventListener('change', () => {
         setPermissionStatus(result.state as 'prompt' | 'granted' | 'denied');
         if (result.state === 'denied') {
-          setError('Camera access has been blocked. Please enable camera permissions in your browser settings and refresh the page.');
+          if (isIOS) {
+            setError('Camera access blocked. Go to Settings → Safari → Camera → Allow to enable camera access.');
+          } else {
+            setError('Camera access has been blocked. Please enable camera permissions in your browser settings and refresh the page.');
+          }
         } else {
           setError('');
         }
       });
     } catch (err) {
       console.log('Permission API not supported, will prompt when camera is accessed');
+      // iOS Safari often doesn't support the permissions API
+      if (isIOS) {
+        console.log('iOS detected - permissions will be requested when camera is accessed');
+      }
     }
   };
 
@@ -123,32 +147,39 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
 
       html5QrCodeRef.current = new Html5Qrcode(scannerId);
 
-      // Add timeout wrapper for camera initialization - shorter timeout for mobile
+      // Add timeout wrapper for camera initialization - iOS-specific timing
       const initializeWithTimeout = async (cameraConfig: any, config: any) => {
         return new Promise((resolve, reject) => {
-          const timeoutDuration = isMobile ? 6000 : 10000; // Shorter timeout on mobile
+          const timeoutDuration = isIOS ? 8000 : (isMobile ? 6000 : 10000); // Longer timeout for iOS
           const timeout = setTimeout(() => {
             reject(new Error('Camera initialization timeout'));
           }, timeoutDuration);
 
-          html5QrCodeRef.current!.start(
-            cameraConfig,
-            config,
-            qrCodeSuccessCallback,
-            qrCodeErrorCallback
-          ).then(() => {
-            clearTimeout(timeout);
-            isRunningRef.current = true;
-            resolve(true);
-          }).catch((error) => {
-            clearTimeout(timeout);
-            reject(error);
-          });
+          // iOS Safari sometimes needs a delay before camera initialization
+          const initDelay = isIOS && isSafari ? 500 : 0;
+
+          setTimeout(() => {
+            html5QrCodeRef.current!.start(
+              cameraConfig,
+              config,
+              qrCodeSuccessCallback,
+              qrCodeErrorCallback
+            ).then(() => {
+              clearTimeout(timeout);
+              isRunningRef.current = true;
+              resolve(true);
+            }).catch((error) => {
+              clearTimeout(timeout);
+              reject(error);
+            });
+          }, initDelay);
         });
       };
 
-      // Detect if we're on a mobile device for optimized settings
+      // Detect device type for optimized settings
       const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+      const isSafari = /Safari/i.test(navigator.userAgent) && !/Chrome/i.test(navigator.userAgent);
 
       // Calculate responsive qrbox size based on viewport - smaller for mobile
       const config = {
@@ -176,8 +207,13 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
         experimentalFeatures: {
           useBarCodeDetectorIfSupported: true
         },
-        // Optimize video settings for mobile performance
-        videoConstraints: isMobile ? {
+        // Optimize video settings for iOS and mobile performance
+        videoConstraints: isIOS ? {
+          width: { ideal: 640 },               // iOS prefers fixed resolution
+          height: { ideal: 480 },
+          frameRate: { ideal: 15 },            // iOS can handle higher FPS
+          facingMode: 'environment'            // Simple constraint for iOS
+        } : isMobile ? {
           width: { ideal: 640, max: 1024 },     // Lower resolution for mobile
           height: { ideal: 480, max: 768 },
           focusMode: 'continuous',
@@ -197,9 +233,27 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
 
       // Try multiple camera configurations for iPhone compatibility
 
-      // Optimized camera initialization sequence for mobile performance
-      if (isMobile) {
-        // Mobile-optimized sequence: prioritize rear camera for barcode scanning
+      // iOS-specific camera initialization sequence
+      if (isIOS) {
+        // iOS Safari-optimized sequence: simpler constraints work better
+        try {
+          // First try: simple environment camera for iOS
+          await initializeWithTimeout({ facingMode: 'environment' }, config);
+        } catch (envError) {
+          console.log('iOS environment camera failed, trying without constraints:', envError);
+
+          // Second try: no constraints (let iOS choose)
+          try {
+            await initializeWithTimeout({}, config);
+          } catch (anyError) {
+            console.log('iOS any camera failed, trying user camera:', anyError);
+
+            // Final try: front camera
+            await initializeWithTimeout({ facingMode: 'user' }, config);
+          }
+        }
+      } else if (isMobile) {
+        // Android mobile-optimized sequence: prioritize rear camera for barcode scanning
         try {
           // First try: exact environment camera (rear camera) for mobile
           await initializeWithTimeout({ facingMode: { exact: 'environment' } }, config);
@@ -268,24 +322,58 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
 
       const errorMessage = err?.message || err?.toString() || '';
       const errorName = err?.name || '';
+      const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
 
       if (errorName === 'NotAllowedError' || errorMessage.includes('Permission denied') || errorMessage.includes('permission denied')) {
-        setError('Camera access was denied. Please click "Allow" when your browser asks for camera permission, or enable it in your browser settings.');
+        if (isIOS) {
+          setError('Camera permission denied. Tap "Allow" when prompted, or go to Settings → Safari → Camera → Allow.');
+        } else {
+          setError('Camera access was denied. Please click "Allow" when your browser asks for camera permission, or enable it in your browser settings.');
+        }
       } else if (errorName === 'NotFoundError' || errorMessage.includes('not find') || errorMessage.includes('Requested device not found')) {
-        setError('Rear camera not found. Please ensure your device has a rear camera or try using a different device.');
+        if (isIOS) {
+          setError('Camera not available. Please ensure Safari has camera permissions and your device has a working camera.');
+        } else {
+          setError('Rear camera not found. Please ensure your device has a rear camera or try using a different device.');
+        }
       } else if (errorName === 'NotReadableError' || errorMessage.includes('Could not start video source') || errorMessage.includes('already in use')) {
-        setError('Camera is already in use by another application. Please close other apps using the camera and try again.');
+        if (isIOS) {
+          setError('Camera in use by another app. Close other camera apps and try again.');
+        } else {
+          setError('Camera is already in use by another application. Please close other apps using the camera and try again.');
+        }
       } else if (errorName === 'NotSupportedError' || errorMessage.includes('secure') || errorMessage.includes('Only secure origins')) {
-        setError('Camera access requires HTTPS. Please access this site using https:// or localhost.');
+        if (isIOS) {
+          setError('iOS requires HTTPS for camera access. Please use https:// to access this site.');
+        } else {
+          setError('Camera access requires HTTPS. Please access this site using https:// or localhost.');
+        }
       } else if (errorName === 'OverconstrainedError' || errorMessage.includes('Overconstrained')) {
-        setError('Camera constraint issue detected. This is common on mobile devices.');
-        // The multiple camera attempts above should handle this case
+        if (isIOS) {
+          setError('Camera configuration issue. This sometimes happens on iOS - try reloading the page.');
+        } else {
+          setError('Camera constraint issue detected. This is common on mobile devices.');
+        }
       } else if (errorMessage.includes('Camera access is only supported in secure contexts')) {
-        setError('Camera access requires HTTPS. Please access this site using https:// or localhost.');
+        if (isIOS) {
+          setError('iOS requires HTTPS for camera access. Please use https:// to access this site.');
+        } else {
+          setError('Camera access requires HTTPS. Please access this site using https:// or localhost.');
+        }
       } else if (errorMessage.includes('not found in DOM')) {
         setError('Scanner initialization failed. Please try again.');
+      } else if (errorMessage.includes('Camera initialization timeout')) {
+        if (isIOS) {
+          setError('Camera taking too long to start. Try reloading the page or closing other apps.');
+        } else {
+          setError('Camera initialization timeout. Please try again.');
+        }
       } else {
-        setError(`Unable to access camera: ${errorMessage || 'Unknown error'}. Check browser console for details.`);
+        if (isIOS) {
+          setError(`Camera error on iOS: ${errorMessage || 'Unknown error'}. Try reloading the page or checking Safari settings.`);
+        } else {
+          setError(`Unable to access camera: ${errorMessage || 'Unknown error'}. Check browser console for details.`);
+        }
       }
     }
   };
