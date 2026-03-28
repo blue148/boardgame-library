@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Camera, X, Loader } from 'lucide-react';
-import { Html5Qrcode } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 
 interface BarcodeScannerProps {
   onScan: (barcode: string) => void;
@@ -88,12 +88,18 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
     if (!isMountedRef.current) return;
 
     console.log('Barcode detected:', decodedText);
+
+    // Immediately stop scanning to prevent duplicate scans and improve performance
+    setIsScanning(false);
     stopScanning();
     onScan(decodedText);
   };
 
-  const qrCodeErrorCallback = () => {
-    // Silent - this fires frequently when no barcode is detected
+  const qrCodeErrorCallback = (error: string) => {
+    // Only log significant errors, not the constant "No barcode detected" messages
+    if (error && !error.includes('No barcode or QR code detected') && !error.includes('NotFoundException')) {
+      console.log('Scanner error:', error);
+    }
   };
 
   const startScanning = () => {
@@ -117,12 +123,13 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
 
       html5QrCodeRef.current = new Html5Qrcode(scannerId);
 
-      // Add timeout wrapper for camera initialization
+      // Add timeout wrapper for camera initialization - shorter timeout for mobile
       const initializeWithTimeout = async (cameraConfig: any, config: any) => {
         return new Promise((resolve, reject) => {
+          const timeoutDuration = isMobile ? 6000 : 10000; // Shorter timeout on mobile
           const timeout = setTimeout(() => {
-            reject(new Error('Camera initialization timeout - this can happen on iPhone'));
-          }, 10000); // 10 second timeout
+            reject(new Error('Camera initialization timeout'));
+          }, timeoutDuration);
 
           html5QrCodeRef.current!.start(
             cameraConfig,
@@ -140,58 +147,94 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
         });
       };
 
-      // Calculate responsive qrbox size based on viewport
+      // Detect if we're on a mobile device for optimized settings
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
+      // Calculate responsive qrbox size based on viewport - smaller for mobile
       const config = {
-        fps: 10, // Lower FPS for better iPhone performance
-        qrbox: function(viewfinderWidth: number, viewfinderHeight: number) {
-          const minEdgePercentage = 0.7;
-          const minEdgeSize = Math.min(viewfinderWidth, viewfinderHeight);
-          const qrboxSize = Math.floor(minEdgeSize * minEdgePercentage);
+        fps: isMobile ? 8 : 12, // Lower FPS on mobile for better performance
+        qrbox: function(viewfinderWidth: number, _viewfinderHeight: number) {
+          // Smaller scanning area on mobile for faster processing
+          const widthRatio = isMobile ? 0.6 : 0.75;
+          const width = Math.min(viewfinderWidth * widthRatio, isMobile ? 220 : 280);
+          const height = Math.min(width * 0.25, isMobile ? 55 : 70);
           return {
-            width: qrboxSize,
-            height: Math.floor(qrboxSize * 0.4) // Rectangular for barcodes
+            width: Math.floor(width),
+            height: Math.floor(height)
           };
         },
         aspectRatio: 1.777778,
-        disableFlip: false, // Allow flip for iPhone compatibility
+        disableFlip: false,
+        // Focus on most common barcode formats for speed - prioritize board game formats
         formatsToSupport: [
-          'EAN_13',
-          'EAN_8',
-          'UPC_A',
-          'UPC_E',
-          'CODE_128',
-          'CODE_39',
-          'CODE_93',
-          'CODABAR',
-          'ITF'
+          Html5QrcodeSupportedFormats.EAN_13, // Most common on board games
+          Html5QrcodeSupportedFormats.UPC_A,  // Common in North America
+          Html5QrcodeSupportedFormats.EAN_8   // Smaller products
         ],
         rememberLastUsedCamera: true,
-        supportedScanTypes: ['EAN_13', 'EAN_8', 'UPC_A', 'UPC_E', 'CODE_128']
+        // Enable native barcode detection on supported devices (iPhone)
+        experimentalFeatures: {
+          useBarCodeDetectorIfSupported: true
+        },
+        // Optimize video settings for mobile performance
+        videoConstraints: isMobile ? {
+          width: { ideal: 640, max: 1024 },     // Lower resolution for mobile
+          height: { ideal: 480, max: 768 },
+          focusMode: 'continuous',
+          frameRate: { ideal: 8, max: 12 }     // Limit frame rate
+        } : {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          focusMode: 'continuous'
+        },
+        // Disable verbose logging for performance
+        verbose: false,
+        showTorchButtonIfSupported: true
       };
 
 
       // Try multiple camera configurations for iPhone compatibility
 
-      // First try: environment camera (rear)
-      try {
-        await initializeWithTimeout({ facingMode: 'environment' }, config);
-      } catch (envError) {
-        console.log('Environment camera failed, trying exact constraint:', envError);
-
-        // Second try: specific environment constraint
+      // Optimized camera initialization sequence for iPhone performance
+      if (isMobile) {
+        // iPhone-optimized sequence: start with most likely to work
         try {
-          await initializeWithTimeout({ facingMode: { exact: 'environment' } }, config);
-        } catch (exactError) {
-          console.log('Exact environment camera failed, trying user camera:', exactError);
+          // First try: simple environment camera for iPhone
+          await initializeWithTimeout({ facingMode: 'environment' }, config);
+        } catch (envError) {
+          console.log('Environment camera failed, trying without constraints:', envError);
 
-          // Third try: user camera (front)
+          // Second try: any camera without constraints (fastest)
           try {
-            await initializeWithTimeout({ facingMode: 'user' }, config);
-          } catch (userError) {
-            console.log('User camera failed, trying any camera:', userError);
+            await initializeWithTimeout({}, config);
+          } catch (anyError) {
+            console.log('Any camera failed, trying user camera:', anyError);
 
-            // Final try: any available camera
+            // Final try: front camera
+            await initializeWithTimeout({ facingMode: 'user' }, config);
+          }
+        }
+      } else {
+        // Desktop sequence: try advanced settings
+        try {
+          await initializeWithTimeout({
+            facingMode: 'environment',
+            advanced: [
+              { focusMode: 'continuous' },
+              { focusDistance: { ideal: 0.3 } },
+              { zoom: { ideal: 1.0 } }
+            ]
+          }, config);
+        } catch (envError) {
+          console.log('Environment camera with advanced settings failed, trying basic environment:', envError);
+
+          // Fallback to basic environment camera
+          try {
+            await initializeWithTimeout({ facingMode: 'environment' }, config);
+          } catch (basicError) {
+            console.log('Basic environment camera failed, trying any camera:', basicError);
+
+            // Final fallback
             await initializeWithTimeout({}, config);
           }
         }
