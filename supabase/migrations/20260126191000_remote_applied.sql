@@ -1,0 +1,1 @@
+-- Migration applied remotely via Supabase dashboard. Placeholder added to sync local history.
