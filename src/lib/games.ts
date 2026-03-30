@@ -1,4 +1,4 @@
-import { supabase, Game, UserLibraryEntry } from './supabase';
+import { supabase, Game, UserLibraryEntry, UserWishlistEntry } from './supabase';
 
 export async function getUserLibrary(userId: string) {
   const { data, error } = await supabase
@@ -193,4 +193,113 @@ export async function enrichSharedGameWithBggId(barcode: string): Promise<Game |
 
   // No bgg_id found, return the existing game
   return existingGame;
+}
+
+// Wishlist functions
+export async function getUserWishlist(userId: string) {
+  const { data, error } = await supabase
+    .from('user_wishlist')
+    .select(`
+      *,
+      game:shared_games(*)
+    `)
+    .eq('user_id', userId)
+    .order('added_date', { ascending: false });
+
+  if (error) throw error;
+  return data as (UserWishlistEntry & { game: Game })[];
+}
+
+export async function getWishlistEntry(entryId: string) {
+  const { data, error } = await supabase
+    .from('user_wishlist')
+    .select(`
+      *,
+      game:shared_games(*)
+    `)
+    .eq('id', entryId)
+    .single();
+
+  if (error) throw error;
+  return data as UserWishlistEntry & { game: Game };
+}
+
+export async function addGameToWishlist(userId: string, gameId: string, priority: 'high' | 'medium' | 'low' = 'medium', notes?: string) {
+  const { data, error } = await supabase
+    .from('user_wishlist')
+    .insert({
+      user_id: userId,
+      game_id: gameId,
+      priority,
+      notes,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as UserWishlistEntry;
+}
+
+export async function updateWishlistEntry(
+  entryId: string,
+  updates: Partial<Pick<UserWishlistEntry, 'priority' | 'notes'>>
+) {
+  const { data, error } = await supabase
+    .from('user_wishlist')
+    .update(updates)
+    .eq('id', entryId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as UserWishlistEntry;
+}
+
+export async function removeGameFromWishlist(entryId: string) {
+  const { error } = await supabase
+    .from('user_wishlist')
+    .delete()
+    .eq('id', entryId);
+
+  if (error) throw error;
+}
+
+export async function moveGameFromWishlistToLibrary(userId: string, wishlistEntryId: string) {
+  // Get the wishlist entry
+  const wishlistEntry = await getWishlistEntry(wishlistEntryId);
+
+  // Add to library
+  const libraryEntry = await addGameToLibrary(userId, wishlistEntry.game_id);
+
+  // Remove from wishlist
+  await removeGameFromWishlist(wishlistEntryId);
+
+  return libraryEntry;
+}
+
+export async function checkGameInUserCollections(userId: string, gameId: string) {
+  const [libraryCheck, wishlistCheck] = await Promise.all([
+    supabase
+      .from('user_library')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('game_id', gameId)
+      .maybeSingle(),
+    supabase
+      .from('user_wishlist')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('game_id', gameId)
+      .maybeSingle()
+  ]);
+
+  if (libraryCheck.error) throw libraryCheck.error;
+  if (wishlistCheck.error) throw wishlistCheck.error;
+
+  return {
+    inLibrary: !!libraryCheck.data,
+    inWishlist: !!wishlistCheck.data,
+    libraryEntryId: libraryCheck.data?.id,
+    wishlistEntryId: wishlistCheck.data?.id,
+  };
 }

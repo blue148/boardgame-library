@@ -3,15 +3,16 @@ import { Camera, X, Loader } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 
 interface BarcodeScannerProps {
-  onScan: (barcode: string) => void;
+  onScan: (barcode: string, addToWishlist?: boolean) => void;
   onClose: () => void;
-  onManualEntry: () => void;
+  onManualEntry: (addToWishlist?: boolean) => void;
 }
 
 export default function BarcodeScanner({ onScan, onClose, onManualEntry }: BarcodeScannerProps) {
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string>('');
   const [permissionStatus, setPermissionStatus] = useState<'prompt' | 'granted' | 'denied' | 'unsupported'>('prompt');
+  const [scannedBarcode, setScannedBarcode] = useState<string>('');
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const scannerIdRef = useRef<string>('barcode-scanner-' + Math.random().toString(36).substring(7));
   const shouldInitScanner = useRef(false);
@@ -113,10 +114,10 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
 
     console.log('Barcode detected:', decodedText);
 
-    // Immediately stop scanning to prevent duplicate scans and improve performance
+    // Store the scanned barcode and stop scanning to show choice UI
+    setScannedBarcode(decodedText);
     setIsScanning(false);
     stopScanning();
-    onScan(decodedText);
   };
 
   const qrCodeErrorCallback = (error: string) => {
@@ -398,7 +399,48 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
         </div>
 
         <div className="p-6">
-          {!isScanning ? (
+          {scannedBarcode ? (
+            <div className="space-y-6">
+              <div className="bg-forest-50 border thin-rule border-forest-300 p-4">
+                <p className="text-sm font-body text-forest-900 leading-relaxed">
+                  Barcode detected! Choose where to add this game:
+                </p>
+                <p className="text-xs font-body text-forest-700 mt-2 leading-relaxed">
+                  Barcode: {scannedBarcode}
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <button
+                  onClick={() => onScan(scannedBarcode, false)}
+                  className="w-full flex items-center justify-center gap-2 bg-slate-900 text-cream py-4 font-body text-sm uppercase tracking-wider hover:bg-slate-800 transition"
+                >
+                  <span>Add to My Catalogue</span>
+                  <span className="text-xs opacity-75">(I own this)</span>
+                </button>
+
+                <button
+                  onClick={() => onScan(scannedBarcode, true)}
+                  className="w-full flex items-center justify-center gap-2 bg-terracotta-600 text-cream py-4 font-body text-sm uppercase tracking-wider hover:bg-terracotta-700 transition"
+                >
+                  <span>Add to Wishlist</span>
+                  <span className="text-xs opacity-75">(I want this)</span>
+                </button>
+              </div>
+
+              <div className="text-center">
+                <button
+                  onClick={() => {
+                    setScannedBarcode('');
+                    setIsScanning(false);
+                  }}
+                  className="text-xs font-body text-slate-600 hover:text-slate-900 uppercase tracking-wider transition"
+                >
+                  Scan Again
+                </button>
+              </div>
+            </div>
+          ) : !isScanning ? (
             <div className="space-y-6">
               <div className="bg-slate-50 border thin-rule rule-line p-4">
                 <p className="text-sm font-body text-slate-700 leading-relaxed">
@@ -434,12 +476,18 @@ export default function BarcodeScanner({ onScan, onClose, onManualEntry }: Barco
                 <span>Begin Scan</span>
               </button>
 
-              <div className="text-center">
+              <div className="text-center space-y-2">
                 <button
-                  onClick={onManualEntry}
-                  className="text-xs font-body text-slate-600 hover:text-slate-900 uppercase tracking-wider transition"
+                  onClick={() => onManualEntry(false)}
+                  className="block w-full text-xs font-body text-slate-600 hover:text-slate-900 uppercase tracking-wider transition"
                 >
-                  Search by Title
+                  Add to Catalogue by Title
+                </button>
+                <button
+                  onClick={() => onManualEntry(true)}
+                  className="block w-full text-xs font-body text-slate-600 hover:text-slate-900 uppercase tracking-wider transition"
+                >
+                  Add to Wishlist by Title
                 </button>
               </div>
             </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Plus, Star, Filter, Grid3x3, List, ChevronDown, X, ArrowUpDown, DollarSign } from 'lucide-react';
+import { Plus, Star, Filter, Grid3x3, List, ChevronDown, X, ArrowUpDown, DollarSign, Heart, Library as LibraryIcon } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getUserLibrary,
@@ -10,6 +10,8 @@ import {
   addGameToLibrary,
   updateLibraryEntry,
   removeGameFromLibrary,
+  checkGameInUserCollections,
+  addGameToWishlist,
 } from '../lib/games';
 import { lookupBarcodeWithBgg, submitBarcodeToGameUpc } from '../lib/bgg';
 import { UserLibraryEntry, Game } from '../lib/supabase';
@@ -18,12 +20,14 @@ import BarcodeScanner from './BarcodeScanner';
 import EditGameModal from './EditGameModal';
 import SearchSharedGamesModal from './SearchSharedGamesModal';
 import ManualGameEntry from './ManualGameEntry';
+import Wishlist from './Wishlist';
 import Tooltip from './Tooltip';
 
 type SortOption = 'name-asc' | 'name-desc' | 'date-added-desc' | 'date-added-asc' | 'plays-desc' | 'plays-asc';
 
 export default function Library() {
   const { user, refreshProfile } = useAuth();
+  const [activeTab, setActiveTab] = useState<'catalogue' | 'wishlist'>('catalogue');
   const [library, setLibrary] = useState<(UserLibraryEntry & { game: Game })[]>([]);
   const [filteredLibrary, setFilteredLibrary] = useState<(UserLibraryEntry & { game: Game })[]>([]);
   const [loading, setLoading] = useState(true);
@@ -222,7 +226,7 @@ export default function Library() {
     await refreshProfile();
   };
 
-  const handleScanBarcode = async (barcode: string) => {
+  const handleScanBarcode = async (barcode: string, addToWishlist: boolean = false) => {
     if (!user) return;
 
     try {
@@ -277,16 +281,21 @@ export default function Library() {
         }
       }
 
-      // Check if game is already in the user's library
-      const isInLibrary = library.some((entry) => entry.game_id === game.id);
-      if (isInLibrary) {
+      // Check if game is already in user's collections
+      const collections = await checkGameInUserCollections(user.id, game.id);
+      if (collections.inLibrary || (addToWishlist && collections.inWishlist)) {
         setShowScanner(false);
         setShowDuplicateModal(true);
         return;
       }
 
-      await addGameToLibrary(user.id, game.id);
-      await loadLibrary();
+      if (addToWishlist) {
+        await addGameToWishlist(user.id, game.id);
+      } else {
+        await addGameToLibrary(user.id, game.id);
+        await loadLibrary();
+      }
+
       await refreshProfile();
       setShowScanner(false);
     } catch (error) {
@@ -310,7 +319,7 @@ export default function Library() {
     game_category?: string[];
     game_mechanic?: string[];
     description?: string;
-  }) => {
+  }, addToWishlist: boolean = false) => {
     if (!user) return;
 
     try {
@@ -356,8 +365,13 @@ export default function Library() {
         });
       }
 
-      await addGameToLibrary(user.id, game.id);
-      await loadLibrary();
+      if (addToWishlist) {
+        await addGameToWishlist(user.id, game.id);
+      } else {
+        await addGameToLibrary(user.id, game.id);
+        await loadLibrary();
+      }
+
       await refreshProfile();
       setShowManualEntry(false);
       setScannedBarcode('');
@@ -478,8 +492,39 @@ export default function Library() {
 
   return (
     <div className="min-h-screen bg-cream">
-
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-12 py-8 sm:py-12">
+        {/* Navigation Tabs */}
+        <div className="mb-8 sm:mb-12">
+          <div className="flex border-b thin-rule rule-line">
+            <button
+              onClick={() => setActiveTab('catalogue')}
+              className={`flex items-center gap-2 px-6 py-4 font-body text-sm uppercase tracking-wider transition ${
+                activeTab === 'catalogue'
+                  ? 'border-b-2 border-slate-900 text-slate-900'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <LibraryIcon className="w-4 h-4" strokeWidth={1.5} />
+              <span>My Catalogue</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('wishlist')}
+              className={`flex items-center gap-2 px-6 py-4 font-body text-sm uppercase tracking-wider transition ${
+                activeTab === 'wishlist'
+                  ? 'border-b-2 border-terracotta-500 text-terracotta-700'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Heart className="w-4 h-4" strokeWidth={1.5} />
+              <span>Wishlist</span>
+            </button>
+          </div>
+        </div>
+
+        {activeTab === 'wishlist' ? (
+          <Wishlist />
+        ) : (
+          <div>
         <div className="mb-8 sm:mb-12 space-y-4 sm:space-y-6">
           <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 border-b thin-rule rule-line pb-6">
             <div className="relative flex-1">
@@ -784,8 +829,11 @@ export default function Library() {
             ))}
           </div>
         )}
+          </div>
+        )}
       </main>
 
+      {/* Modals */}
       {showSearchModal && user && (
         <SearchSharedGamesModal
           userId={user.id}

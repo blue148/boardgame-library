@@ -44,6 +44,17 @@ export interface UserLibraryEntry {
   game?: Game;
 }
 
+export interface UserWishlistEntry {
+  id: string;
+  user_id: string;
+  game_id: string;
+  priority: 'high' | 'medium' | 'low';
+  notes?: string;
+  added_date: string;
+  updated_at: string;
+  game?: Game;
+}
+
 export interface Profile {
   id: string;
   email: string;
