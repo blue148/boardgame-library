@@ -36,32 +36,27 @@ serve(async (req) => {
       );
     }
 
-    // Optional JWT verification for logged-in users
+    // Require a valid user JWT — prevents unauthenticated callers from burning API quota
     const authHeader = req.headers.get('Authorization');
-    if (authHeader) {
-      try {
-        // Create Supabase client with the auth token
-        const supabaseClient = createClient(
-          Deno.env.get('SUPABASE_URL') ?? '',
-          Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-          {
-            global: {
-              headers: { Authorization: authHeader },
-            },
-          }
-        );
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
+    }
 
-        // Verify the user is authenticated
-        const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      { global: { headers: { Authorization: authHeader } } }
+    );
 
-        if (authError || !user) {
-          console.warn('Auth verification failed:', authError);
-          // Continue anyway - don't block the request
-        }
-      } catch (authError) {
-        console.warn('Auth check error:', authError);
-        // Continue anyway - don't block the request
-      }
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !user) {
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+      );
     }
 
     const body: BggLookupRequest = await req.json();

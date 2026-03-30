@@ -61,8 +61,8 @@ export default function ProfileDrawer({ isOpen, onClose }: ProfileDrawerProps) {
 
     const file = e.target.files[0];
 
-    if (!file.type.startsWith('image/')) {
-      setError('Please upload an image file');
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+      setError('Please upload a JPG, PNG, WebP, or GIF image');
       return;
     }
 
@@ -285,7 +285,7 @@ export default function ProfileDrawer({ isOpen, onClose }: ProfileDrawerProps) {
                       <Upload className="w-4 h-4" strokeWidth={1.5} />
                       {uploadingAvatar ? 'Uploading...' : 'Upload Photo'}
                     </button>
-                    <p className="mt-1.5 text-xs font-body text-slate-400">Max 2MB · JPG, PNG, or GIF</p>
+                    <p className="mt-1.5 text-xs font-body text-slate-400">Max 2MB · JPG, PNG, WebP, or GIF</p>
                   </div>
                 </div>
 
